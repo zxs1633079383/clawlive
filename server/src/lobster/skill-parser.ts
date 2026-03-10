@@ -9,8 +9,8 @@ interface SkillFrontmatter {
   name?: string;
   description?: string;
   version?: string;
-  triggerInterval?: string;
-  maxSuggestionRate?: string;
+  triggerInterval?: string | number;
+  maxSuggestionRate?: string | number;
   triggerConditions?: string[];
   collaborationMode?: string;
   preferredFormat?: string;
@@ -68,6 +68,29 @@ export function parseSkill(markdown: string): LobsterSkill {
 export async function parseSkillFile(filePath: string): Promise<LobsterSkill> {
   const raw = await readFile(filePath, 'utf-8');
   return parseSkill(raw);
+}
+
+/**
+ * Parse a SKILL.md from a remote URL.
+ * The lobster reads this URL to learn how to participate in meetings.
+ */
+export async function parseSkillFromUrl(url: string): Promise<LobsterSkill> {
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new Error(`Failed to fetch SKILL.md from ${url}: ${response.status} ${response.statusText}`);
+  }
+  const raw = await response.text();
+  return parseSkill(raw);
+}
+
+/**
+ * Load a skill from either a URL (http/https) or a local file path.
+ */
+export async function loadSkill(source: string): Promise<LobsterSkill> {
+  if (source.startsWith('http://') || source.startsWith('https://')) {
+    return parseSkillFromUrl(source);
+  }
+  return parseSkillFile(source);
 }
 
 /**
@@ -190,30 +213,37 @@ function deduplicateStrings(arr: string[]): string[] {
 /**
  * Parse a duration string like "15s" or "1/30s" into milliseconds.
  */
-function parseDuration(value: string | undefined, defaultMs: number): number {
-  if (!value) return defaultMs;
+function parseDuration(value: string | number | undefined, defaultMs: number): number {
+  if (value === undefined || value === null) return defaultMs;
+
+  // If it's already a number, treat as seconds
+  if (typeof value === 'number') {
+    return value * 1000;
+  }
+
+  const str = String(value);
 
   // Handle "1/30s" format (rate notation: 1 per 30 seconds)
-  const rateMatch = value.match(/^(\d+)\/(\d+)s$/);
+  const rateMatch = str.match(/^(\d+)\/(\d+)s$/);
   if (rateMatch) {
     return parseInt(rateMatch[2], 10) * 1000;
   }
 
   // Handle "15s" format
-  const secondsMatch = value.match(/^(\d+)s$/);
+  const secondsMatch = str.match(/^(\d+)s$/);
   if (secondsMatch) {
     return parseInt(secondsMatch[1], 10) * 1000;
   }
 
   // Handle "2m" format (minutes)
-  const minutesMatch = value.match(/^(\d+)m$/);
+  const minutesMatch = str.match(/^(\d+)m$/);
   if (minutesMatch) {
     return parseInt(minutesMatch[1], 10) * 60 * 1000;
   }
 
-  // Handle plain number (assumed milliseconds)
-  const num = parseInt(value, 10);
-  return isNaN(num) ? defaultMs : num;
+  // Handle plain number string (assumed seconds)
+  const num = parseInt(str, 10);
+  return isNaN(num) ? defaultMs : num * 1000;
 }
 
 function parseCollaborationMode(value: string | undefined): 'passive' | 'reactive' | 'proactive' {

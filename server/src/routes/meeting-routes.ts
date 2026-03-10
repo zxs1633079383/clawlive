@@ -15,7 +15,7 @@ import {
   getParticipants,
 } from '../services/participant-service.js';
 import { getOrCreateOrchestrator, getLobsterOrchestrator, removeOrchestrator } from '../lobster/lobster-orchestrator.js';
-import { parseSkillFile } from '../lobster/skill-parser.js';
+import { parseSkillFile, loadSkill } from '../lobster/skill-parser.js';
 import { SummaryService, type MeetingSummary } from '../services/summary-service.js';
 import { ClaudeProvider } from '../llm/claude-provider.js';
 import { config } from '../config.js';
@@ -43,7 +43,9 @@ const createMeetingSchema = z.object({
 const joinMeetingSchema = z.object({
   userId: z.string().min(1),
   displayName: z.string().min(1).max(100),
-  skillName: z.string().optional(),
+  lobsterSkillId: z.string().optional(),
+  // Custom path to a SKILL.md file — lobster reads this to know how to participate
+  skillPath: z.string().optional(),
 });
 
 // POST /api/meetings - Create a new meeting
@@ -111,22 +113,87 @@ meetingRouter.post('/:id/join', async (req: Request, res: Response) => {
     }
 
     const participant = joinMeeting(req.params.id, parsed.data);
-
-    // If a skill was specified, set up the lobster agent
-    if (parsed.data.skillName) {
-      try {
-        const skillPath = resolve(config.SKILLS_DIR, `${parsed.data.skillName}.md`);
-        const skill = await parseSkillFile(skillPath);
-        const orchestrator = getOrCreateOrchestrator(req.params.id);
-        orchestrator.createLobster(parsed.data.userId, skill);
-      } catch (skillErr) {
-        console.warn(`[meeting] Failed to load skill "${parsed.data.skillName}":`, skillErr);
-        // Don't fail the join; the user just won't have a lobster
-      }
-    }
-
+    // Human joins without a lobster — lobsters join independently via POST /:id/lobster
     res.status(200).json({ success: true, data: participant, error: null });
   } catch (err) {
+    handleError(res, err);
+  }
+});
+
+// POST /api/meetings/:id/lobster - A lobster joins the meeting
+// The lobster reads its SKILL.md (from URL or local path) to know how to participate.
+// This is how external lobster agents register themselves with a meeting.
+const lobsterJoinSchema = z.object({
+  // The lobster's owner/associated user
+  ownerUserId: z.string().min(1),
+  // SKILL.md source: URL (https://xxx.com/SKILL.md) or local file path
+  skillSource: z.string().min(1),
+  // Optional display name for the lobster
+  lobsterName: z.string().optional(),
+});
+
+meetingRouter.post('/:id/lobster', async (req: Request, res: Response) => {
+  try {
+    const meeting = getMeeting(req.params.id);
+    if (!meeting) {
+      res.status(404).json({ success: false, data: null, error: 'Meeting not found' });
+      return;
+    }
+
+    const parsed = lobsterJoinSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({
+        success: false,
+        data: null,
+        error: parsed.error.flatten().fieldErrors,
+      });
+      return;
+    }
+
+    const { ownerUserId, skillSource } = parsed.data;
+
+    // Load the SKILL.md — the lobster reads this to understand its role
+    console.log(`[meeting] Lobster loading SKILL.md from: ${skillSource}`);
+    const skill = await loadSkill(skillSource);
+
+    const orchestrator = getOrCreateOrchestrator(req.params.id);
+
+    if (orchestrator.hasLobster(ownerUserId)) {
+      // Remove existing lobster and replace with new one
+      orchestrator.removeLobster(ownerUserId);
+    }
+
+    orchestrator.createLobster(ownerUserId, skill);
+
+    // If meeting is already active, set meeting context
+    if (meeting.status === 'active') {
+      const participants = getParticipants(req.params.id);
+      orchestrator.onMeetingStart({
+        title: meeting.title,
+        description: meeting.description,
+        participants: participants.map((p) => ({
+          displayName: p.displayName,
+          userId: p.userId,
+        })),
+      });
+    }
+
+    console.log(`[meeting] Lobster "${skill.name}" joined meeting ${req.params.id} for user ${ownerUserId} (source: ${skillSource})`);
+
+    res.status(200).json({
+      success: true,
+      data: {
+        lobsterId: `lobster-${ownerUserId}`,
+        skillName: skill.name,
+        skillDescription: skill.description,
+        collaborationMode: skill.collaborationMode,
+        meetingId: req.params.id,
+        ownerUserId,
+      },
+      error: null,
+    });
+  } catch (err) {
+    console.error('[meeting] Lobster join error:', err);
     handleError(res, err);
   }
 });

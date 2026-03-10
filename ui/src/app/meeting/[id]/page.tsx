@@ -144,7 +144,7 @@ export default function MeetingRoomPage() {
         const m = await api.meetings.get(meetingId);
         setMeeting(m);
 
-        // Auto-join the meeting
+        // Auto-join the meeting — lobster auto-loads SKILL.md on server side
         const participant = await api.meetings.join(meetingId, {
           userId,
           displayName: userName,
@@ -154,6 +154,16 @@ export default function MeetingRoomPage() {
             ? prev
             : [...prev, participant],
         );
+
+        // Auto-start meeting if still in lobby
+        if (m.status === 'lobby') {
+          try {
+            const started = await api.meetings.start(meetingId);
+            setMeeting(started);
+          } catch {
+            // Another participant may have already started it
+          }
+        }
       } catch (err) {
         setError(
           err instanceof Error ? err.message : 'Failed to join meeting',

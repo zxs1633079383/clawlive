@@ -33,7 +33,9 @@ export function CreateMeetingDialog({
     <Dialog open={open} onClose={onClose}>
       <DialogTitle>Create a Meeting</DialogTitle>
       <DialogDescription>
-        Start a new meeting and invite participants to join.
+        Start a new meeting. Each participant will automatically get a lobster
+        assistant that reads your SKILL.md to know how to help during the
+        discussion.
       </DialogDescription>
 
       <form onSubmit={handleSubmit} className="mt-6 flex flex-col gap-4">
@@ -51,6 +53,16 @@ export function CreateMeetingDialog({
           value={description}
           onChange={(e) => setDescription(e.target.value)}
         />
+
+        <div className="rounded-lg border border-white/10 bg-surface-700/30 px-4 py-3">
+          <div className="flex items-center gap-2 text-sm text-text-secondary">
+            <span>🦞</span>
+            <span>
+              Your lobster will auto-load its SKILL.md to guide meeting
+              participation
+            </span>
+          </div>
+        </div>
 
         <div className="mt-2 flex justify-end gap-3">
           <Button type="button" variant="ghost" onClick={onClose}>

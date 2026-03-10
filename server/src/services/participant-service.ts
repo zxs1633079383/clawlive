@@ -16,7 +16,7 @@ export function joinMeeting(meetingId: string, req: JoinMeetingRequest): Partici
     const updated: Participant = {
       ...existing,
       displayName: req.displayName,
-      skillName: req.skillName ?? existing.skillName,
+      lobsterSkillId: req.lobsterSkillId ?? existing.lobsterSkillId,
       isMuted: false,
     };
     participants.set(k, updated);
@@ -27,7 +27,7 @@ export function joinMeeting(meetingId: string, req: JoinMeetingRequest): Partici
     userId: req.userId,
     meetingId,
     displayName: req.displayName,
-    skillName: req.skillName ?? null,
+    lobsterSkillId: req.lobsterSkillId ?? null,
     isMuted: false,
     joinedAt: Date.now(),
   };

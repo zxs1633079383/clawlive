@@ -39,7 +39,7 @@ export default function LobbyPage() {
       const meeting = await api.meetings.create({
         title: data.title,
         description: data.description || undefined,
-        createdBy: 'anonymous', // TODO: replace with real user
+        createdBy: 'anonymous',
       });
       setIsDialogOpen(false);
       router.push(`/meeting/${meeting.id}`);

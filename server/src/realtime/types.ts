@@ -52,7 +52,7 @@ export interface Participant {
   userId: string;
   meetingId: string;
   displayName: string;
-  skillName: string | null;
+  lobsterSkillId: string | null;
   isMuted: boolean;
   joinedAt: number;
 }
@@ -81,5 +81,5 @@ export interface CreateMeetingRequest {
 export interface JoinMeetingRequest {
   userId: string;
   displayName: string;
-  skillName?: string;
+  lobsterSkillId?: string;
 }

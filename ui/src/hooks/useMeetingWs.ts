@@ -32,7 +32,7 @@ export function useMeetingWs(
   const connect = useCallback(() => {
     if (wsRef.current?.readyState === WebSocket.OPEN) return;
 
-    const url = `${WS_BASE}/api/meetings/${meetingId}/ws?userId=${encodeURIComponent(userId)}`;
+    const url = `${WS_BASE}/ws?meetingId=${encodeURIComponent(meetingId)}&userId=${encodeURIComponent(userId)}`;
     const ws = new WebSocket(url);
 
     ws.onopen = () => {
