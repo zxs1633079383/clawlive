@@ -1,11 +1,13 @@
 'use client';
 
 import { Button } from '@/components/ui/Button';
-import { Badge } from '@/components/ui/Badge';
+import { Badge, MeetingStatusBadge } from '@/components/ui/Badge';
 import { cn } from '@/lib/utils';
+import type { MeetingStatus } from '@clawlive/shared';
 
 interface MeetingControlsProps {
   meetingTitle: string;
+  meetingStatus?: MeetingStatus;
   isConnected: boolean;
   isMuted: boolean;
   isListening: boolean;
@@ -15,6 +17,7 @@ interface MeetingControlsProps {
 
 export function MeetingControls({
   meetingTitle,
+  meetingStatus,
   isConnected,
   isMuted,
   isListening,
@@ -40,6 +43,9 @@ export function MeetingControls({
             <span className="text-xs text-text-muted">
               {isConnected ? 'Connected' : 'Disconnected'}
             </span>
+            {meetingStatus && (
+              <MeetingStatusBadge status={meetingStatus} />
+            )}
           </div>
         </div>
       </div>

@@ -13,6 +13,10 @@ interface RightSidePanelProps {
   suggestions: LobsterMessage[];
   dialogues: LobsterDialogueTurn[];
   onSendPrompt: (text: string) => void;
+  lobsterSkillName?: string;
+  lobsterDescription?: string;
+  isLobsterLoading?: boolean;
+  isDialogueThinking?: boolean;
 }
 
 export function RightSidePanel({
@@ -21,6 +25,10 @@ export function RightSidePanel({
   suggestions,
   dialogues,
   onSendPrompt,
+  lobsterSkillName,
+  lobsterDescription,
+  isLobsterLoading = false,
+  isDialogueThinking = false,
 }: RightSidePanelProps) {
   return (
     <Tabs defaultValue="transcript" className="flex h-full flex-col">
@@ -56,11 +64,20 @@ export function RightSidePanel({
       </TabsContent>
 
       <TabsContent value="lobster" className="flex flex-1 flex-col overflow-hidden">
-        <LobsterPanel suggestions={suggestions} onSendPrompt={onSendPrompt} />
+        <LobsterPanel
+          suggestions={suggestions}
+          onSendPrompt={onSendPrompt}
+          lobsterSkillName={lobsterSkillName}
+          lobsterDescription={lobsterDescription}
+          isLoading={isLobsterLoading}
+        />
       </TabsContent>
 
       <TabsContent value="dialogue" className="flex flex-1 flex-col overflow-hidden">
-        <LobsterDialoguePanel dialogues={dialogues} />
+        <LobsterDialoguePanel
+          dialogues={dialogues}
+          isThinking={isDialogueThinking}
+        />
       </TabsContent>
     </Tabs>
   );

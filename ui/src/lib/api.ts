@@ -29,8 +29,10 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
 export interface MeetingSummary {
   meetingId: string;
   summary: string;
-  actionItems: string[];
-  keyDecisions: string[];
+  globalSummary: string;
+  personalSummary?: string;
+  actionItems: Array<string | { action: string; assignee: string; deadline?: string; status: string }>;
+  keyDecisions: Array<string | { decision: string; timestamp: string; participants: string[] }>;
   generatedAt: string;
 }
 
@@ -61,8 +63,10 @@ export const api = {
     getTranscript: (id: string) =>
       request<TranscriptSegment[]>(`/api/meetings/${id}/transcript`),
 
-    getSummary: (id: string) =>
-      request<MeetingSummary>(`/api/meetings/${id}/summary`),
+    getSummary: (id: string, userId?: string) => {
+      const params = userId ? `?userId=${encodeURIComponent(userId)}` : '';
+      return request<MeetingSummary>(`/api/meetings/${id}/summary${params}`);
+    },
   },
 
   skills: {

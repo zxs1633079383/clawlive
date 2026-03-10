@@ -1,6 +1,7 @@
 'use client';
 
 import { cn, speakerColor } from '@/lib/utils';
+import { LobsterAvatar, getLobsterColor } from './LobsterAvatar';
 
 interface ParticipantCardProps {
   displayName: string;
@@ -52,16 +53,29 @@ export function ParticipantCard({
         <span className="mt-1 text-xs text-red-400/80">Muted</span>
       )}
 
-      {/* Lobster indicator */}
+      {/* Lobster indicator with role badge */}
       {hasLobster && (
         <div className="absolute -right-1 -top-1 flex h-7 w-7 items-center justify-center rounded-full border border-lobster/30 bg-surface-800 text-sm">
           🦞
         </div>
       )}
 
-      {/* Lobster skill */}
+      {/* Lobster role badge */}
       {lobsterSkillId && (
-        <p className="mt-1.5 text-[10px] text-lobster/70">{lobsterSkillId}</p>
+        <div className="mt-2 flex items-center gap-1.5 rounded-full px-2 py-0.5"
+          style={{
+            backgroundColor: `${getLobsterColor(lobsterSkillId)}15`,
+            border: `1px solid ${getLobsterColor(lobsterSkillId)}30`,
+          }}
+        >
+          <LobsterAvatar skillName={lobsterSkillId} size="sm" />
+          <span
+            className="text-[10px] font-medium"
+            style={{ color: getLobsterColor(lobsterSkillId) }}
+          >
+            {lobsterSkillId}
+          </span>
+        </div>
       )}
     </div>
   );

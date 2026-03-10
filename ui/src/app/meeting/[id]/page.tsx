@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
-import type { Meeting, Participant, ServerMessage } from '@clawlive/shared';
+import type { Meeting, Participant, ServerMessage, TranscriptSegment } from '@clawlive/shared';
 import { api } from '@/lib/api';
 import { generateId } from '@/lib/utils';
 import { useMeetingWs } from '@/hooks/useMeetingWs';
@@ -12,6 +12,10 @@ import { useLobster } from '@/hooks/useLobster';
 import { MeetingControls } from '@/components/meeting/MeetingControls';
 import { ParticipantGrid } from '@/components/meeting/ParticipantGrid';
 import { RightSidePanel } from '@/components/meeting/RightSidePanel';
+import { AgoraBridge } from '@/components/meeting/AgoraBridge';
+
+// Agora App ID from environment (optional - degrades gracefully if not set)
+const AGORA_APP_ID = process.env.NEXT_PUBLIC_AGORA_APP_ID ?? '';
 
 // Simple user identity for demo purposes
 function getOrCreateUserId(): string {
@@ -46,6 +50,9 @@ export default function MeetingRoomPage() {
   const [participants, setParticipants] = useState<Participant[]>([]);
   const [isMuted, setIsMuted] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [audioState, setAudioState] = useState({ isJoined: false, isAudioEnabled: true });
+  const [isLobsterLoading, setIsLobsterLoading] = useState(false);
+  const [isDialogueThinking, setIsDialogueThinking] = useState(false);
 
   const { segments, addSegment, scrollRef } = useTranscript();
   const { suggestions, dialogues, addSuggestion, addDialogue } = useLobster();
@@ -65,9 +72,11 @@ export default function MeetingRoomPage() {
             // Only show suggestions targeted to this user
             if (msg.targetUserId === userId) {
               addSuggestion(msg.payload);
+              setIsLobsterLoading(false);
             }
           } else if (msg.type === 'dialogue') {
             addDialogue(msg.payload);
+            setIsDialogueThinking(false);
           }
           break;
 
@@ -79,6 +88,11 @@ export default function MeetingRoomPage() {
             }).catch(() => { /* ignore */ });
           } else if (msg.type === 'meeting_state_changed') {
             const payload = msg.payload as { status?: string };
+            if (payload?.status) {
+              setMeeting((prev) =>
+                prev ? { ...prev, status: payload.status as Meeting['status'] } : prev,
+              );
+            }
             if (payload?.status === 'ended') {
               router.push(`/summary/${meetingId}`);
             }
@@ -97,19 +111,31 @@ export default function MeetingRoomPage() {
 
   // STT: send transcript segments via WebSocket
   const handleSttSegment = useCallback(
-    (segment: Parameters<typeof addSegment>[0]) => {
+    (segment: TranscriptSegment) => {
       addSegment(segment);
       send({ channel: 'transcript', type: 'segment', payload: segment });
     },
     [addSegment, send],
   );
 
+  // Determine whether to use Agora bridge or direct STT
+  const useAgoraBridge = Boolean(AGORA_APP_ID);
+
+  // Direct STT (used when Agora is not configured)
   const { isListening, start: startStt, stop: stopStt } = useStt({
     meetingId,
     speakerId: userId,
     speakerName: userName,
     onSegment: handleSttSegment,
   });
+
+  // Handle audio state changes from AgoraBridge
+  const handleAudioStateChange = useCallback(
+    (state: { isJoined: boolean; isAudioEnabled: boolean }) => {
+      setAudioState(state);
+    },
+    [],
+  );
 
   // Fetch meeting data on mount
   useEffect(() => {
@@ -142,25 +168,33 @@ export default function MeetingRoomPage() {
     const newMuted = !isMuted;
     setIsMuted(newMuted);
 
-    if (newMuted) {
-      stopStt();
-      send({ channel: 'control', type: 'mute' });
+    if (!useAgoraBridge) {
+      // Direct STT mode - manage STT manually
+      if (newMuted) {
+        stopStt();
+        send({ channel: 'control', type: 'mute' });
+      } else {
+        startStt();
+        send({ channel: 'control', type: 'unmute' });
+      }
     } else {
-      startStt();
-      send({ channel: 'control', type: 'unmute' });
+      // Agora bridge mode - AgoraBridge handles STT sync via isMuted prop
+      send({ channel: 'control', type: newMuted ? 'mute' : 'unmute' });
     }
   }
 
-  // Auto-start STT when connected
+  // Auto-start STT when connected (direct mode only)
   useEffect(() => {
-    if (isConnected && !isMuted && !isListening) {
+    if (!useAgoraBridge && isConnected && !isMuted && !isListening) {
       startStt();
     }
-  }, [isConnected, isMuted, isListening, startStt]);
+  }, [useAgoraBridge, isConnected, isMuted, isListening, startStt]);
 
   // Leave meeting
   function handleLeave() {
-    stopStt();
+    if (!useAgoraBridge) {
+      stopStt();
+    }
     send({ channel: 'control', type: 'leave' });
     disconnect();
     router.push('/lobby');
@@ -168,14 +202,19 @@ export default function MeetingRoomPage() {
 
   // Send lobster prompt
   function handleSendPrompt(text: string) {
+    setIsLobsterLoading(true);
     send({ channel: 'lobster', type: 'user_prompt', payload: { text } });
   }
+
+  // Find current user's lobster skill
+  const currentParticipant = participants.find((p) => p.userId === userId);
+  const lobsterSkillName = currentParticipant?.lobsterSkillId;
 
   if (error) {
     return (
       <div className="flex min-h-screen items-center justify-center">
         <div className="text-center">
-          <div className="mb-4 text-4xl">🦞</div>
+          <div className="mb-4 text-4xl">&#x1F99E;</div>
           <h2 className="text-lg font-semibold text-text-primary">
             Unable to join meeting
           </h2>
@@ -193,12 +232,26 @@ export default function MeetingRoomPage() {
 
   return (
     <div className="flex h-screen flex-col overflow-hidden bg-surface-900">
+      {/* Agora Bridge (hidden audio + STT bridge component) */}
+      {useAgoraBridge && (
+        <AgoraBridge
+          meetingId={meetingId}
+          userId={userId}
+          userName={userName}
+          agoraAppId={AGORA_APP_ID}
+          isMuted={isMuted}
+          onTranscriptSegment={handleSttSegment}
+          onAudioStateChange={handleAudioStateChange}
+        />
+      )}
+
       {/* Top controls */}
       <MeetingControls
         meetingTitle={meeting?.title ?? 'Loading...'}
+        meetingStatus={meeting?.status}
         isConnected={isConnected}
         isMuted={isMuted}
-        isListening={isListening}
+        isListening={useAgoraBridge ? (audioState.isJoined && !isMuted) : isListening}
         onToggleMute={handleToggleMute}
         onLeave={handleLeave}
       />
@@ -221,6 +274,9 @@ export default function MeetingRoomPage() {
             suggestions={suggestions}
             dialogues={dialogues}
             onSendPrompt={handleSendPrompt}
+            lobsterSkillName={lobsterSkillName}
+            isLobsterLoading={isLobsterLoading}
+            isDialogueThinking={isDialogueThinking}
           />
         </div>
       </div>

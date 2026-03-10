@@ -14,10 +14,24 @@ import {
   joinMeeting,
   getParticipants,
 } from '../services/participant-service.js';
-import { getOrCreateOrchestrator, removeOrchestrator } from '../lobster/lobster-orchestrator.js';
+import { getOrCreateOrchestrator, getLobsterOrchestrator, removeOrchestrator } from '../lobster/lobster-orchestrator.js';
 import { parseSkillFile } from '../lobster/skill-parser.js';
+import { SummaryService, type MeetingSummary } from '../services/summary-service.js';
+import { ClaudeProvider } from '../llm/claude-provider.js';
 import { config } from '../config.js';
 import { resolve } from 'node:path';
+
+// In-memory cache for generated summaries
+const summaryCache = new Map<string, MeetingSummary>();
+
+// Lazy-initialized summary service
+let summaryService: SummaryService | null = null;
+function getSummaryService(): SummaryService {
+  if (!summaryService) {
+    summaryService = new SummaryService(new ClaudeProvider());
+  }
+  return summaryService;
+}
 
 export const meetingRouter: Router = Router();
 
@@ -154,10 +168,11 @@ meetingRouter.get('/:id/transcript', (req: Request, res: Response) => {
   }
 });
 
-// GET /api/meetings/:id/summary - Get meeting summary (placeholder)
-meetingRouter.get('/:id/summary', (req: Request, res: Response) => {
+// GET /api/meetings/:id/summary - Get meeting summary
+meetingRouter.get('/:id/summary', async (req: Request, res: Response) => {
   try {
-    const meeting = getMeeting(req.params.id);
+    const meetingId = req.params.id;
+    const meeting = getMeeting(meetingId);
     if (!meeting) {
       res.status(404).json({ success: false, data: null, error: 'Meeting not found' });
       return;
@@ -172,17 +187,111 @@ meetingRouter.get('/:id/summary', (req: Request, res: Response) => {
       return;
     }
 
-    // TODO: Generate summary using LLM based on transcript
-    const transcript = getTranscript(req.params.id);
-    res.json({
-      success: true,
-      data: {
-        meetingId: req.params.id,
-        summary: 'Summary generation not yet implemented',
-        transcriptSegments: transcript.length,
-      },
-      error: null,
-    });
+    // Check cache first
+    const cached = summaryCache.get(meetingId);
+    if (cached) {
+      const userId = (req.query.userId as string) ?? '';
+      const personalSummary = cached.personalSummaries.get(userId);
+
+      res.json({
+        success: true,
+        data: {
+          meetingId,
+          summary: cached.globalSummary,
+          globalSummary: cached.globalSummary,
+          personalSummary: personalSummary ?? null,
+          keyDecisions: cached.keyDecisions.map((d) => ({
+            decision: d.decision,
+            timestamp: d.timestamp.toISOString(),
+            participants: d.participants,
+          })),
+          actionItems: cached.actionItems.map((a) => ({
+            action: a.action,
+            assignee: a.assignee,
+            deadline: a.deadline ?? null,
+            status: a.status,
+          })),
+          generatedAt: cached.generatedAt.toISOString(),
+        },
+        error: null,
+      });
+      return;
+    }
+
+    // Generate summary using SummaryService
+    const transcript = getTranscript(meetingId);
+    const participants = getParticipants(meetingId);
+    const participantIds = participants.map((p) => p.userId);
+
+    // Collect lobster messages and dialogue from the orchestrator if available
+    const orchestrator = getLobsterOrchestrator(meetingId);
+    const lobsterDialogue = orchestrator?.getRecentDialogue(100) ?? [];
+
+    // Build transcript segments in the format SummaryService expects
+    const transcriptSegments = transcript.map((seg) => ({
+      speakerId: seg.speakerId,
+      text: seg.text,
+      timestamp: seg.timestamp,
+      isFinal: true,
+    }));
+
+    try {
+      const service = getSummaryService();
+      const result = await service.generateMeetingSummary(
+        meetingId,
+        meeting.title,
+        transcriptSegments,
+        [], // lobster messages (would need separate storage; empty for now)
+        lobsterDialogue,
+        participantIds,
+      );
+
+      // Cache the result
+      summaryCache.set(meetingId, result);
+
+      const userId = (req.query.userId as string) ?? '';
+      const personalSummary = result.personalSummaries.get(userId);
+
+      res.json({
+        success: true,
+        data: {
+          meetingId,
+          summary: result.globalSummary,
+          globalSummary: result.globalSummary,
+          personalSummary: personalSummary ?? null,
+          keyDecisions: result.keyDecisions.map((d) => ({
+            decision: d.decision,
+            timestamp: d.timestamp.toISOString(),
+            participants: d.participants,
+          })),
+          actionItems: result.actionItems.map((a) => ({
+            action: a.action,
+            assignee: a.assignee,
+            deadline: a.deadline ?? null,
+            status: a.status,
+          })),
+          generatedAt: result.generatedAt.toISOString(),
+        },
+        error: null,
+      });
+    } catch (llmErr) {
+      console.error('[meeting-routes] Summary generation failed:', llmErr);
+
+      // Fallback: return basic info without LLM-generated content
+      res.json({
+        success: true,
+        data: {
+          meetingId,
+          summary: 'Summary generation failed. Please try again later.',
+          globalSummary: 'Summary generation failed. Please try again later.',
+          personalSummary: null,
+          keyDecisions: [],
+          actionItems: [],
+          generatedAt: new Date().toISOString(),
+        },
+        error: null,
+      });
+    }
   } catch (err) {
     handleError(res, err);
   }

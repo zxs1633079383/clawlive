@@ -1,84 +1,69 @@
 'use client';
 
-import { useCallback, useRef, useState } from 'react';
+import { useState, useCallback, useRef, useEffect } from 'react';
 import type { TranscriptSegment } from '@clawlive/shared';
-import { generateId } from '@/lib/utils';
-
-interface SpeechRecognitionEvent {
-  resultIndex: number;
-  results: SpeechRecognitionResultList;
-}
-
-interface SpeechRecognitionErrorEvent {
-  error: string;
-}
-
-interface SpeechRecognitionInstance extends EventTarget {
-  continuous: boolean;
-  interimResults: boolean;
-  lang: string;
-  start(): void;
-  stop(): void;
-  abort(): void;
-  onresult: ((event: SpeechRecognitionEvent) => void) | null;
-  onerror: ((event: SpeechRecognitionErrorEvent) => void) | null;
-  onend: (() => void) | null;
-}
-
-declare global {
-  interface Window {
-    SpeechRecognition: new () => SpeechRecognitionInstance;
-    webkitSpeechRecognition: new () => SpeechRecognitionInstance;
-  }
-}
 
 interface UseSttOptions {
-  meetingId: string;
+  onSegment: (segment: TranscriptSegment) => void;
   speakerId: string;
   speakerName: string;
-  onSegment: (segment: TranscriptSegment) => void;
+  meetingId: string;
   language?: string;
+  continuous?: boolean;
 }
 
-function getSpeechRecognitionClass():
-  | (new () => SpeechRecognitionInstance)
-  | null {
-  if (typeof window === 'undefined') return null;
-  return window.SpeechRecognition ?? window.webkitSpeechRecognition ?? null;
+interface UseSttReturn {
+  isListening: boolean;
+  isSupported: boolean;
+  start: () => void;
+  stop: () => void;
+  error: string | null;
 }
 
-export function useStt(options: UseSttOptions) {
-  const { meetingId, speakerId, speakerName, onSegment, language = 'en-US' } =
-    options;
+// Generate a simple unique ID
+function generateSegmentId(): string {
+  return `seg_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+}
+
+export function useStt(options: UseSttOptions): UseSttReturn {
+  const { onSegment, speakerId, speakerName, meetingId, language = 'zh-CN', continuous = true } = options;
 
   const [isListening, setIsListening] = useState(false);
-  const recognitionRef = useRef<SpeechRecognitionInstance | null>(null);
-  const segmentIdRef = useRef<string>(generateId());
-  const isSupported = getSpeechRecognitionClass() !== null;
+  const [error, setError] = useState<string | null>(null);
+  const recognitionRef = useRef<SpeechRecognition | null>(null);
+  const isStoppingRef = useRef(false);
+  const currentSegmentIdRef = useRef<string>(generateSegmentId());
 
-  const start = useCallback(() => {
-    const SpeechRecognition = getSpeechRecognitionClass();
-    if (!SpeechRecognition) return;
+  // Check browser support
+  const isSupported = typeof window !== 'undefined' &&
+    ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window);
 
-    const recognition = new SpeechRecognition();
-    recognition.continuous = true;
+  const createRecognition = useCallback(() => {
+    if (!isSupported) return null;
+
+    const SpeechRecognitionAPI = window.SpeechRecognition || window.webkitSpeechRecognition;
+    const recognition = new SpeechRecognitionAPI();
+
+    recognition.continuous = continuous;
     recognition.interimResults = true;
     recognition.lang = language;
+    recognition.maxAlternatives = 1;
 
     recognition.onresult = (event: SpeechRecognitionEvent) => {
       for (let i = event.resultIndex; i < event.results.length; i++) {
         const result = event.results[i];
-        const transcript = result[0].transcript.trim();
-        if (!transcript) continue;
+        const text = result[0].transcript.trim();
+
+        if (!text) continue;
 
         const isFinal = result.isFinal;
 
         const segment: TranscriptSegment = {
-          id: segmentIdRef.current,
+          id: currentSegmentIdRef.current,
           meetingId,
           speakerId,
           speakerName,
-          text: transcript,
+          text,
           timestamp: new Date(),
           isFinal,
           language,
@@ -86,41 +71,82 @@ export function useStt(options: UseSttOptions) {
 
         onSegment(segment);
 
+        // Generate new ID for next segment when current one is final
         if (isFinal) {
-          segmentIdRef.current = generateId();
+          currentSegmentIdRef.current = generateSegmentId();
         }
       }
     };
 
     recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
-      console.error('[stt] Error:', event.error);
-      if (event.error === 'not-allowed') {
+      // 'no-speech' and 'aborted' are non-critical
+      if (event.error === 'no-speech' || event.error === 'aborted') {
+        return;
+      }
+      console.error('[useStt] Recognition error:', event.error);
+      setError(`Speech recognition error: ${event.error}`);
+      setIsListening(false);
+    };
+
+    recognition.onend = () => {
+      // Auto-restart if not deliberately stopped
+      if (!isStoppingRef.current) {
+        try {
+          recognition.start();
+        } catch {
+          // May fail if already started
+          setIsListening(false);
+        }
+      } else {
         setIsListening(false);
       }
     };
 
-    recognition.onend = () => {
-      // Auto-restart unless manually stopped
-      if (recognitionRef.current) {
-        try {
-          recognition.start();
-        } catch {
-          setIsListening(false);
-        }
-      }
-    };
+    return recognition;
+  }, [isSupported, continuous, language, meetingId, speakerId, speakerName, onSegment]);
+
+  const start = useCallback(() => {
+    if (!isSupported) {
+      setError('Speech recognition not supported in this browser');
+      return;
+    }
+
+    // Stop existing recognition
+    if (recognitionRef.current) {
+      recognitionRef.current.abort();
+    }
+
+    isStoppingRef.current = false;
+    const recognition = createRecognition();
+    if (!recognition) return;
 
     recognitionRef.current = recognition;
-    recognition.start();
-    setIsListening(true);
-  }, [meetingId, speakerId, speakerName, language, onSegment]);
+
+    try {
+      recognition.start();
+      setIsListening(true);
+      setError(null);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Failed to start speech recognition';
+      setError(message);
+    }
+  }, [isSupported, createRecognition]);
 
   const stop = useCallback(() => {
-    const recognition = recognitionRef.current;
+    isStoppingRef.current = true;
+    recognitionRef.current?.stop();
     recognitionRef.current = null;
-    recognition?.stop();
     setIsListening(false);
   }, []);
 
-  return { isListening, start, stop, isSupported };
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      isStoppingRef.current = true;
+      recognitionRef.current?.abort();
+      recognitionRef.current = null;
+    };
+  }, []);
+
+  return { isListening, isSupported, start, stop, error };
 }
