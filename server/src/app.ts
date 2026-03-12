@@ -7,7 +7,10 @@ import { skillRouter } from './routes/skill-routes.js';
 export function createApp(): Express {
   const app = express();
 
-  app.use(cors({ origin: config.CORS_ORIGIN, credentials: true }));
+  app.use(cors({
+    origin: config.NODE_ENV === 'development' ? true : config.CORS_ORIGIN,
+    credentials: true,
+  }));
   app.use(express.json());
 
   app.use('/api/meetings', meetingRouter);

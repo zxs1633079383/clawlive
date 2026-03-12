@@ -7,10 +7,16 @@ import type {
   LobsterSkill,
 } from '@clawlive/shared';
 
-const API_BASE =
-  typeof window !== 'undefined'
-    ? (process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001')
-    : 'http://localhost:3001';
+function getApiBase(): string {
+  if (typeof window === 'undefined') return 'http://localhost:3001';
+  if (process.env.NEXT_PUBLIC_API_URL) return process.env.NEXT_PUBLIC_API_URL;
+  const isHttps = window.location.protocol === 'https:';
+  // HTTPS → API via SSL proxy on 3444; HTTP → API direct on 3001
+  const apiPort = isHttps ? 3444 : 3001;
+  return `${window.location.protocol}//${window.location.hostname}:${apiPort}`;
+}
+
+const API_BASE = getApiBase();
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
@@ -23,17 +29,48 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
     throw new Error(`API ${res.status}: ${body}`);
   }
 
-  return res.json() as Promise<T>;
+  const json = await res.json();
+
+  // 服务器返回 { success, data, error } 格式，解包 data
+  if (json && typeof json === 'object' && 'success' in json && 'data' in json) {
+    if (!json.success) {
+      throw new Error(json.error ?? 'API request failed');
+    }
+    return json.data as T;
+  }
+
+  return json as T;
 }
 
-export interface MeetingSummary {
-  meetingId: string;
+/** 龙虾对话轮次 (API 返回的 JSON，timestamp 为 number) */
+export interface DialogueTurnData {
+  fromLobsterId: string;
+  toLobsterId?: string | null;
+  content: string;
+  timestamp: number;
+}
+
+/** 主龙虾摘要 (API 返回的 JSON，timestamp 为 number) */
+export interface SummaryData {
+  fromLobsterId: string;
   summary: string;
-  globalSummary: string;
-  personalSummary?: string;
-  actionItems: Array<string | { action: string; assignee: string; deadline?: string; status: string }>;
-  keyDecisions: Array<string | { decision: string; timestamp: string; participants: string[] }>;
-  generatedAt: string;
+  keyDecisions: string[];
+  actionItems: string[];
+  timestamp: number;
+}
+
+/** 会议摘要数据 — 包含转录、龙虾讨论、主龙虾生成的摘要 */
+export interface MeetingSummaryData {
+  meetingId: string;
+  title: string;
+  description: string;
+  startedAt: number | null;
+  endedAt: number | null;
+  participants: Array<{ userId: string; displayName: string }>;
+  lobsters: Array<{ lobsterId: string; skillName: string; skillDescription: string; collaborationMode: string; ownerUserId: string }>;
+  transcript: Array<{ speakerId: string; speakerName?: string; text: string; timestamp: number }>;
+  dialogues: DialogueTurnData[];
+  summary: SummaryData | null;
 }
 
 export const api = {
@@ -63,10 +100,15 @@ export const api = {
     getTranscript: (id: string) =>
       request<TranscriptSegment[]>(`/api/meetings/${id}/transcript`),
 
-    getSummary: (id: string, userId?: string) => {
-      const params = userId ? `?userId=${encodeURIComponent(userId)}` : '';
-      return request<MeetingSummary>(`/api/meetings/${id}/summary${params}`);
-    },
+    getSummary: (id: string) =>
+      request<MeetingSummaryData>(`/api/meetings/${id}/summary`),
+
+    // Lobster reads SKILL.md from URL and joins meeting
+    addLobster: (id: string, data: { ownerUserId: string; skillSource: string }) =>
+      request<{ lobsterId: string; skillName: string; skillDescription: string; collaborationMode: string }>(
+        `/api/meetings/${id}/lobster`,
+        { method: 'POST', body: JSON.stringify(data) },
+      ),
   },
 
   skills: {

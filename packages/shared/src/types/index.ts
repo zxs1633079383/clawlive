@@ -11,6 +11,7 @@ export type {
   LobsterSkill,
   LobsterMessage,
   LobsterDialogueTurn,
+  MeetingSummaryPayload,
 } from './lobster.js';
 
 export type {

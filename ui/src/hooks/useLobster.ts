@@ -1,22 +1,17 @@
 'use client';
 
 import { useCallback, useState } from 'react';
-import type { LobsterMessage, LobsterDialogueTurn } from '@clawlive/shared';
+import type { LobsterDialogueTurn } from '@clawlive/shared';
 
+/**
+ * Hook for tracking lobster dialogue turns.
+ * Humans are observers — they watch lobsters discuss among themselves.
+ */
 export function useLobster() {
-  const [suggestions, setSuggestions] = useState<LobsterMessage[]>([]);
   const [dialogues, setDialogues] = useState<LobsterDialogueTurn[]>([]);
-
-  const addSuggestion = useCallback((msg: LobsterMessage) => {
-    setSuggestions((prev) => [...prev, msg]);
-  }, []);
 
   const addDialogue = useCallback((turn: LobsterDialogueTurn) => {
     setDialogues((prev) => [...prev, turn]);
-  }, []);
-
-  const clearSuggestions = useCallback(() => {
-    setSuggestions([]);
   }, []);
 
   const clearDialogues = useCallback(() => {
@@ -24,11 +19,8 @@ export function useLobster() {
   }, []);
 
   return {
-    suggestions,
     dialogues,
-    addSuggestion,
     addDialogue,
-    clearSuggestions,
     clearDialogues,
   };
 }

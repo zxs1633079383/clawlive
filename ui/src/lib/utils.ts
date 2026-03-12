@@ -5,8 +5,8 @@ export function cn(...inputs: ClassValue[]): string {
   return twMerge(clsx(inputs));
 }
 
-export function formatTime(date: Date | string): string {
-  const d = typeof date === 'string' ? new Date(date) : date;
+export function formatTime(date: Date | string | number): string {
+  const d = typeof date === 'string' || typeof date === 'number' ? new Date(date) : date;
   return d.toLocaleTimeString('en-US', {
     hour: '2-digit',
     minute: '2-digit',
@@ -15,8 +15,8 @@ export function formatTime(date: Date | string): string {
   });
 }
 
-export function formatRelativeTime(date: Date | string): string {
-  const d = typeof date === 'string' ? new Date(date) : date;
+export function formatRelativeTime(date: Date | string | number): string {
+  const d = typeof date === 'string' || typeof date === 'number' ? new Date(date) : date;
   const now = new Date();
   const diffMs = now.getTime() - d.getTime();
   const diffMin = Math.floor(diffMs / 60_000);

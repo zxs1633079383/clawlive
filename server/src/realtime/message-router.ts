@@ -1,15 +1,27 @@
 import type { MeetingRoom } from './meeting-room.js';
 import type { ClientMessage, ServerMessage } from './types.js';
-import { getLobsterOrchestrator } from '../lobster/lobster-orchestrator.js';
 import { updateMuteStatus, removeMeetingParticipant } from '../services/participant-service.js';
+import { appendTranscript, appendDialogue, saveSummary } from '../services/meeting-service.js';
 
+/**
+ * Route incoming WebSocket messages.
+ *
+ * The server is a pure message broker — no LLM calls.
+ * - Humans send transcript (STT) and control messages.
+ * - Lobsters (external agents with their own LLM) send dialogue messages.
+ * - All messages are broadcast to everyone in the room.
+ */
 export function routeMessage(room: MeetingRoom, userId: string, message: ClientMessage): void {
   switch (message.channel) {
     case 'transcript':
       handleTranscript(room, userId, message);
       break;
     case 'lobster':
-      handleLobster(room, userId, message);
+      if (message.type === 'summary') {
+        handleLobsterSummary(room, userId, message as Extract<ClientMessage, { channel: 'lobster'; type: 'summary' }>);
+      } else {
+        handleLobsterDialogue(room, userId, message as Extract<ClientMessage, { channel: 'lobster'; type: 'dialogue' }>);
+      }
       break;
     case 'control':
       handleControl(room, userId, message);
@@ -21,69 +33,76 @@ export function routeMessage(room: MeetingRoom, userId: string, message: ClientM
 
 function handleTranscript(
   room: MeetingRoom,
-  userId: string,
+  _userId: string,
   message: Extract<ClientMessage, { channel: 'transcript' }>,
 ): void {
-  // Broadcast transcript segment to all participants
+  const { payload } = message;
+
+  console.log(`[router] 🗣️ Transcript from ${payload.speakerId}: "${payload.text}" (final: ${payload.isFinal})`);
+
+  // 持久化转录段，会议结束后可用于摘要
+  appendTranscript(room.meetingId, {
+    speakerId: payload.speakerId,
+    speakerName: (payload as unknown as { speakerName?: string }).speakerName,
+    text: payload.text,
+    timestamp: payload.timestamp,
+  });
+
+  // Broadcast transcript to all participants:
+  // - Humans see the transcript
+  // - Lobsters (external agents) receive it and decide whether to respond
   const serverMsg: ServerMessage = {
     channel: 'transcript',
     type: 'segment',
-    payload: message.payload,
+    payload,
   };
   room.broadcast(serverMsg);
-
-  // Feed to lobster orchestrator
-  const orchestrator = getLobsterOrchestrator(room.meetingId);
-  if (orchestrator) {
-    orchestrator.distributeTranscript(message.payload).then((suggestions) => {
-      for (const suggestion of suggestions) {
-        const lobsterMsg: ServerMessage = {
-          channel: 'lobster',
-          type: 'suggestion',
-          payload: suggestion,
-          targetUserId: suggestion.ownerUserId,
-        };
-        room.sendToUser(suggestion.ownerUserId, lobsterMsg);
-      }
-    }).catch((err) => {
-      console.error(`[router] Error distributing transcript in meeting ${room.meetingId}:`, err);
-    });
-  }
 }
 
-function handleLobster(
+/**
+ * A lobster (external agent) sends a dialogue turn.
+ * Broadcast it to everyone so humans can observe and other lobsters can react.
+ */
+function handleLobsterDialogue(
   room: MeetingRoom,
   userId: string,
-  message: Extract<ClientMessage, { channel: 'lobster' }>,
+  message: Extract<ClientMessage, { channel: 'lobster'; type: 'dialogue' }>,
 ): void {
-  const orchestrator = getLobsterOrchestrator(room.meetingId);
-  if (!orchestrator) {
-    const errorMsg: ServerMessage = {
-      channel: 'control',
-      type: 'error',
-      payload: { message: 'No lobster orchestrator for this meeting' },
-    };
-    room.sendToUser(userId, errorMsg);
-    return;
-  }
+  console.log(`[router] Lobster dialogue from ${userId} in meeting ${room.meetingId}`);
 
-  orchestrator.handleUserPrompt(userId, message.payload.text).then((response) => {
-    const lobsterMsg: ServerMessage = {
-      channel: 'lobster',
-      type: 'suggestion',
-      payload: response,
-      targetUserId: userId,
-    };
-    room.sendToUser(userId, lobsterMsg);
-  }).catch((err) => {
-    console.error(`[router] Error handling lobster prompt for user ${userId}:`, err);
-    const errorMsg: ServerMessage = {
-      channel: 'control',
-      type: 'error',
-      payload: { message: 'Failed to process lobster prompt' },
-    };
-    room.sendToUser(userId, errorMsg);
-  });
+  // 持久化龙虾对话，会议结束后可用于讨论结果
+  appendDialogue(room.meetingId, message.payload);
+
+  const serverMsg: ServerMessage = {
+    channel: 'lobster',
+    type: 'dialogue',
+    payload: message.payload,
+  };
+  // Broadcast to all (humans observe, other lobsters may react)
+  room.broadcast(serverMsg, userId);
+}
+
+/**
+ * 主龙虾（会议主持人）发送会议摘要。
+ * 存储摘要并广播给所有人。
+ */
+function handleLobsterSummary(
+  room: MeetingRoom,
+  userId: string,
+  message: Extract<ClientMessage, { channel: 'lobster'; type: 'summary' }>,
+): void {
+  console.log(`[router] Meeting summary from host lobster ${userId} in meeting ${room.meetingId}`);
+
+  // 持久化摘要
+  saveSummary(room.meetingId, message.payload);
+
+  const serverMsg: ServerMessage = {
+    channel: 'lobster',
+    type: 'summary',
+    payload: message.payload,
+  };
+  // 广播给所有人（人类在 Summary 页面看到）
+  room.broadcast(serverMsg);
 }
 
 function handleControl(
@@ -122,7 +141,6 @@ function handleControl(
       } catch (err: unknown) {
         console.error(`[router] Error removing participant ${userId}:`, err);
       }
-      // The WebSocket close handler in ws-server.ts handles broadcasting + cleanup
       break;
   }
 }

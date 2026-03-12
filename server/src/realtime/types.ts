@@ -25,16 +25,32 @@ export interface LobsterDialogueTurn {
   timestamp: number;
 }
 
+/**
+ * 会议摘要 — 由主龙虾（会议主持人）在会议结束后生成
+ */
+export interface MeetingSummaryPayload {
+  fromLobsterId: string;
+  summary: string;              // 会议整体摘要
+  keyDecisions: string[];       // 关键决策
+  actionItems: string[];        // 行动项
+  timestamp: number;
+}
+
+// Client -> Server
+// Humans send: transcript + control
+// Lobsters send: dialogue + summary (lobster is an external WebSocket client with its own LLM)
 export type ClientMessage =
   | { channel: 'transcript'; type: 'segment'; payload: TranscriptSegment }
-  | { channel: 'lobster'; type: 'user_prompt'; payload: { text: string } }
+  | { channel: 'lobster'; type: 'dialogue'; payload: LobsterDialogueTurn }
+  | { channel: 'lobster'; type: 'summary'; payload: MeetingSummaryPayload }
   | { channel: 'control'; type: 'mute' | 'unmute' | 'leave' };
 
+// Server -> Client (broadcast to all: humans observe, lobsters receive transcript)
 export type ServerMessage =
   | { channel: 'transcript'; type: 'segment'; payload: TranscriptSegment }
-  | { channel: 'lobster'; type: 'suggestion'; payload: LobsterMessage; targetUserId: string }
   | { channel: 'lobster'; type: 'dialogue'; payload: LobsterDialogueTurn }
-  | { channel: 'control'; type: 'participant_joined' | 'participant_left' | 'meeting_state_changed' | 'error'; payload: unknown };
+  | { channel: 'lobster'; type: 'summary'; payload: MeetingSummaryPayload }
+  | { channel: 'control'; type: 'participant_joined' | 'participant_left' | 'meeting_state_changed' | 'meeting_ended' | 'error'; payload: unknown };
 
 export type MeetingStatus = 'lobby' | 'active' | 'ended';
 

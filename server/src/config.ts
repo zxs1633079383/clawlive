@@ -1,17 +1,13 @@
+import { resolve } from 'node:path';
 import { z } from 'zod';
 
 const envSchema = z.object({
   PORT: z.coerce.number().default(3001),
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
   CORS_ORIGIN: z.string().default('http://localhost:3000'),
-  ANTHROPIC_API_KEY: z.string().default(''),
-  OPENAI_API_KEY: z.string().default(''),
   SKILLS_DIR: z.string().default('./skills'),
   DEFAULT_SKILL: z.string().default('meeting-analyst'),
   WS_HEARTBEAT_INTERVAL_MS: z.coerce.number().default(30_000),
-  LOBSTER_TRIGGER_INTERVAL_MS: z.coerce.number().default(15_000),
-  LOBSTER_MAX_SUGGESTION_RATE_MS: z.coerce.number().default(30_000),
-  TRANSCRIPT_WINDOW_MINUTES: z.coerce.number().default(5),
 });
 
 export type Config = z.infer<typeof envSchema>;
@@ -22,7 +18,17 @@ function loadConfig(): Config {
     console.error('Invalid environment variables:', result.error.flatten().fieldErrors);
     throw new Error('Invalid environment configuration');
   }
-  return result.data;
+  const raw = result.data;
+
+  // Resolve SKILLS_DIR relative to the monorepo root (one level up from server/)
+  // When running from server/ cwd, "./skills" would incorrectly resolve to "server/skills"
+  let skillsDir = raw.SKILLS_DIR;
+  if (!skillsDir.startsWith('/')) {
+    // Relative path: resolve from monorepo root (parent of server/)
+    skillsDir = resolve(process.cwd(), '..', skillsDir);
+  }
+
+  return { ...raw, SKILLS_DIR: skillsDir };
 }
 
 export const config: Config = loadConfig();

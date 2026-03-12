@@ -3,6 +3,7 @@ import { WebSocketServer, WebSocket } from 'ws';
 import { config } from '../config.js';
 import { MeetingRoom } from './meeting-room.js';
 import { routeMessage } from './message-router.js';
+import { getLobsters } from '../services/meeting-service.js';
 import type { ClientMessage, ServerMessage } from './types.js';
 
 const rooms = new Map<string, MeetingRoom>();
@@ -49,6 +50,23 @@ export function createWsServer(httpServer: HttpServer): WebSocketServer {
     };
     room.broadcast(joinMessage, userId);
 
+    // If a registered lobster joins, broadcast a system dialogue so the UI shows it
+    if (userId.startsWith('lobster-')) {
+      const registered = getLobsters(meetingId).find((l) => l.lobsterId === userId);
+      const lobsterName = registered?.skillName ?? userId;
+      const systemDialogue: ServerMessage = {
+        channel: 'lobster',
+        type: 'dialogue',
+        payload: {
+          fromLobsterId: userId,
+          toLobsterId: null,
+          content: `🦞 ${lobsterName} 已加入会议，准备参与讨论。`,
+          timestamp: Date.now(),
+        },
+      };
+      room.broadcast(systemDialogue);
+    }
+
     // Heartbeat
     let alive = true;
     const heartbeatInterval = setInterval(() => {
@@ -67,6 +85,7 @@ export function createWsServer(httpServer: HttpServer): WebSocketServer {
     ws.on('message', (raw) => {
       try {
         const message: ClientMessage = JSON.parse(raw.toString());
+        console.log(`[ws] 📩 Message from ${userId}: channel=${message.channel} type=${message.type}`);
         routeMessage(room, userId, message);
       } catch (err) {
         const errorMessage: ServerMessage = {

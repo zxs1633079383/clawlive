@@ -1,127 +1,121 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
-import { api, type MeetingSummary } from '@/lib/api';
-import type { Meeting, TranscriptSegment } from '@clawlive/shared';
+import { api, type MeetingSummaryData } from '@/lib/api';
 import { Card, CardHeader, CardBody } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { Badge } from '@/components/ui/Badge';
-import { formatTime } from '@/lib/utils';
+import { speakerColor } from '@/lib/utils';
 
-function getDecisionText(
-  decision: string | { decision: string; timestamp: string; participants: string[] },
-): { text: string; timestamp?: string; participants?: string[] } {
-  if (typeof decision === 'string') {
-    return { text: decision };
-  }
-  return {
-    text: decision.decision,
-    timestamp: decision.timestamp,
-    participants: decision.participants,
-  };
+function formatTs(ts: number): string {
+  return new Date(ts).toLocaleTimeString('zh-CN', {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  });
 }
 
-function getActionItemInfo(
-  item: string | { action: string; assignee: string; deadline?: string; status: string },
-): { text: string; assignee?: string; deadline?: string; status?: string } {
-  if (typeof item === 'string') {
-    return { text: item };
-  }
-  return {
-    text: item.action,
-    assignee: item.assignee,
-    deadline: item.deadline,
-    status: item.status,
-  };
+function formatDateTime(ts: number): string {
+  return new Date(ts).toLocaleString('zh-CN');
 }
 
 export default function SummaryPage() {
   const params = useParams();
   const meetingId = params.id as string;
 
-  const [meeting, setMeeting] = useState<Meeting | null>(null);
-  const [summary, setSummary] = useState<MeetingSummary | null>(null);
-  const [transcript, setTranscript] = useState<TranscriptSegment[]>([]);
+  const [data, setData] = useState<MeetingSummaryData | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isTranscriptOpen, setIsTranscriptOpen] = useState(false);
+  const [isDialogueOpen, setIsDialogueOpen] = useState(true);
   const [copySuccess, setCopySuccess] = useState(false);
 
+  // 轮询摘要（主龙虾可能还在生成中）
   useEffect(() => {
+    let cancelled = false;
+    let pollTimer: ReturnType<typeof setTimeout> | null = null;
+
     async function fetchData() {
       try {
         setIsLoading(true);
-        // Get userId from session for personalized summary
-        const userId = typeof window !== 'undefined'
-          ? sessionStorage.getItem('clawlive-user-id') ?? ''
-          : '';
-        const [meetingData, summaryData, transcriptData] = await Promise.all([
-          api.meetings.get(meetingId),
-          api.meetings.getSummary(meetingId, userId).catch(() => null),
-          api.meetings.getTranscript(meetingId).catch(() => []),
-        ]);
-        setMeeting(meetingData);
-        setSummary(summaryData);
-        setTranscript(transcriptData);
+        const result = await api.meetings.getSummary(meetingId);
+        if (cancelled) return;
+        setData(result);
+
+        // 如果主龙虾还没生成摘要，5秒后再查一次
+        if (!result.summary && !cancelled) {
+          pollTimer = setTimeout(fetchData, 5000);
+        }
       } catch (err) {
-        setError(err instanceof Error ? err.message : 'Failed to load summary');
+        if (!cancelled) {
+          setError(err instanceof Error ? err.message : '加载失败');
+        }
       } finally {
-        setIsLoading(false);
+        if (!cancelled) setIsLoading(false);
       }
     }
     fetchData();
+
+    return () => {
+      cancelled = true;
+      if (pollTimer) clearTimeout(pollTimer);
+    };
   }, [meetingId]);
 
-  const handleCopyToClipboard = useCallback(async () => {
-    if (!summary || !meeting) return;
+  const handleCopy = useCallback(async () => {
+    if (!data) return;
 
-    const globalText = summary.globalSummary || summary.summary || '';
-    const decisionsText = summary.keyDecisions
-      .map((d) => {
-        const info = getDecisionText(d);
-        const parts = [info.text];
-        if (info.participants && info.participants.length > 0) {
-          parts.push(`(${info.participants.join(', ')})`);
-        }
-        return `  - ${parts.join(' ')}`;
-      })
-      .join('\n');
+    const lines: string[] = [
+      `# ${data.title}`,
+      data.description ? `${data.description}\n` : '',
+    ];
 
-    const actionsText = summary.actionItems
-      .map((a) => {
-        const info = getActionItemInfo(a);
-        const parts = [info.text];
-        if (info.assignee) parts.push(`[${info.assignee}]`);
-        if (info.deadline) parts.push(`due: ${info.deadline}`);
-        return `  - ${parts.join(' ')}`;
-      })
-      .join('\n');
+    if (data.summary) {
+      lines.push('## 会议摘要');
+      lines.push(data.summary.summary);
+      lines.push('');
 
-    const transcriptText = transcript
-      .map((seg) => `[${formatTime(seg.timestamp)}] ${seg.speakerName}: ${seg.text}`)
-      .join('\n');
+      if (data.summary.keyDecisions.length > 0) {
+        lines.push('## 关键决策');
+        data.summary.keyDecisions.forEach((d) => lines.push(`- ${d}`));
+        lines.push('');
+      }
 
-    const fullText = [
-      `# ${meeting.title}`,
-      meeting.description ? `${meeting.description}\n` : '',
-      '## Summary',
-      globalText,
-      '',
-      summary.keyDecisions.length > 0 ? '## Key Decisions\n' + decisionsText : '',
-      summary.actionItems.length > 0 ? '## Action Items\n' + actionsText : '',
-      transcript.length > 0 ? '## Transcript\n' + transcriptText : '',
-    ]
-      .filter(Boolean)
-      .join('\n\n');
+      if (data.summary.actionItems.length > 0) {
+        lines.push('## 行动项');
+        data.summary.actionItems.forEach((a) => lines.push(`- ${a}`));
+        lines.push('');
+      }
+    }
+
+    if (data.dialogues.length > 0) {
+      lines.push('## 龙虾讨论记录');
+      data.dialogues.forEach((d) => {
+        const target = d.toLobsterId ? ` → ${d.toLobsterId}` : '';
+        lines.push(`[${formatTs(d.timestamp)}] ${d.fromLobsterId}${target}: ${d.content}`);
+      });
+      lines.push('');
+    }
+
+    if (data.transcript.length > 0) {
+      lines.push('## 会议转录');
+      data.transcript.forEach((seg) => {
+        const name = seg.speakerName ?? seg.speakerId;
+        lines.push(`[${formatTs(seg.timestamp)}] ${name}: ${seg.text}`);
+      });
+    }
+
+    const fullText = lines.filter(Boolean).join('\n');
 
     try {
       await navigator.clipboard.writeText(fullText);
       setCopySuccess(true);
       setTimeout(() => setCopySuccess(false), 2000);
     } catch {
-      // Fallback: select-all on a textarea
+      // Fallback
       const textarea = document.createElement('textarea');
       textarea.value = fullText;
       document.body.appendChild(textarea);
@@ -131,14 +125,14 @@ export default function SummaryPage() {
       setCopySuccess(true);
       setTimeout(() => setCopySuccess(false), 2000);
     }
-  }, [summary, meeting, transcript]);
+  }, [data]);
 
   if (isLoading) {
     return (
       <div className="flex min-h-screen items-center justify-center">
         <div className="text-center">
-          <div className="mb-3 animate-pulse-soft text-3xl">🦞</div>
-          <span className="text-text-muted">Loading summary...</span>
+          <div className="mb-3 animate-pulse-soft text-3xl">&#x1F99E;</div>
+          <span className="text-text-muted">加载会议摘要...</span>
         </div>
       </div>
     );
@@ -148,237 +142,207 @@ export default function SummaryPage() {
     return (
       <div className="flex min-h-screen items-center justify-center">
         <div className="text-center">
-          <div className="mb-4 text-4xl">🦞</div>
+          <div className="mb-4 text-4xl">&#x1F99E;</div>
           <p className="text-sm text-red-400">{error}</p>
           <Link href="/lobby" className="mt-4 inline-block text-sm text-lobster hover:underline">
-            Back to lobby
+            返回大厅
           </Link>
         </div>
       </div>
     );
   }
 
-  const globalSummaryText = summary?.globalSummary || summary?.summary || '';
-  const personalSummaryText = summary?.personalSummary;
+  if (!data) return null;
+
+  const durationMin = data.startedAt && data.endedAt
+    ? Math.round((data.endedAt - data.startedAt) / 60_000)
+    : null;
 
   return (
     <main className="mx-auto w-full max-w-3xl px-6 py-12 print:px-0 print:py-4">
       {/* Header */}
       <div className="mb-8">
         <Link href="/lobby" className="text-sm text-text-muted hover:text-text-secondary print:hidden">
-          &larr; Back to meetings
+          &larr; 返回会议列表
         </Link>
         <h1 className="mt-4 text-2xl font-bold text-text-primary">
-          {meeting?.title ?? 'Meeting Summary'}
+          {data.title}
         </h1>
-        {meeting?.description && (
-          <p className="mt-1 text-sm text-text-secondary">
-            {meeting.description}
-          </p>
+        {data.description && (
+          <p className="mt-1 text-sm text-text-secondary">{data.description}</p>
         )}
-        <div className="mt-3 flex items-center gap-3 text-xs text-text-muted">
-          <Badge variant="lobster">Summary</Badge>
-          {meeting?.startedAt && (
-            <span>Started: {new Date(meeting.startedAt).toLocaleString()}</span>
-          )}
-          {meeting?.endedAt && (
-            <span>Ended: {new Date(meeting.endedAt).toLocaleString()}</span>
-          )}
+        <div className="mt-3 flex flex-wrap items-center gap-3 text-xs text-text-muted">
+          <Badge variant="lobster">会议摘要</Badge>
+          {data.startedAt && <span>开始: {formatDateTime(data.startedAt)}</span>}
+          {data.endedAt && <span>结束: {formatDateTime(data.endedAt)}</span>}
+          {durationMin !== null && <span>时长: {durationMin} 分钟</span>}
         </div>
 
-        {/* Export options */}
+        {/* 参与者 */}
+        <div className="mt-3 flex flex-wrap gap-2">
+          {data.participants.map((p) => (
+            <span key={p.userId} className="rounded-full bg-surface-700 px-2 py-0.5 text-xs text-text-secondary">
+              {p.displayName}
+            </span>
+          ))}
+          {data.lobsters.map((l) => (
+            <span key={l.lobsterId} className="rounded-full bg-lobster-muted/30 px-2 py-0.5 text-xs text-lobster">
+              &#x1F99E; {l.skillName}
+            </span>
+          ))}
+        </div>
+
+        {/* 导出 */}
         <div className="mt-4 flex items-center gap-2 print:hidden">
-          <Button
-            variant="secondary"
-            size="sm"
-            onClick={handleCopyToClipboard}
-          >
-            {copySuccess ? (
-              <span className="flex items-center gap-1.5">
-                <CheckIcon /> Copied!
-              </span>
-            ) : (
-              <span className="flex items-center gap-1.5">
-                <CopyIcon /> Copy to clipboard
-              </span>
-            )}
+          <Button variant="secondary" size="sm" onClick={handleCopy}>
+            {copySuccess ? '已复制!' : '复制到剪贴板'}
           </Button>
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => window.print()}
-          >
-            Print
+          <Button variant="ghost" size="sm" onClick={() => window.print()}>
+            打印
           </Button>
         </div>
       </div>
 
       <div className="flex flex-col gap-6">
-        {/* Personalized Summary (from your lobster) */}
-        {personalSummaryText && (
-          <Card className="border-lobster/20">
-            <CardHeader>
-              <h2 className="flex items-center gap-2 text-base font-semibold text-text-primary">
-                <span>🦞</span> Your Personalized Summary
-              </h2>
-              <p className="mt-0.5 text-xs text-text-muted">
-                Tailored by your lobster based on your participation
-              </p>
-            </CardHeader>
-            <CardBody>
-              <div className="rounded-lg border border-lobster/10 bg-lobster-muted/30 p-4">
-                <p className="text-sm leading-relaxed text-text-secondary whitespace-pre-wrap">
-                  {personalSummaryText}
+        {/* 主龙虾生成的摘要 */}
+        {data.summary ? (
+          <>
+            <Card className="border-lobster/20">
+              <CardHeader>
+                <h2 className="flex items-center gap-2 text-base font-semibold text-text-primary">
+                  <span>&#x1F99E;</span> 会议摘要
+                </h2>
+                <p className="mt-0.5 text-xs text-text-muted">
+                  由主龙虾 {data.summary.fromLobsterId} 生成
                 </p>
-              </div>
-            </CardBody>
-          </Card>
-        )}
+              </CardHeader>
+              <CardBody>
+                <p className="text-sm leading-relaxed text-text-secondary whitespace-pre-wrap">
+                  {data.summary.summary}
+                </p>
+              </CardBody>
+            </Card>
 
-        {/* Global AI Summary */}
-        {summary ? (
-          <Card>
-            <CardHeader>
-              <h2 className="flex items-center gap-2 text-base font-semibold text-text-primary">
-                <span>🦞🦞</span> Global Summary
-              </h2>
-              <p className="mt-0.5 text-xs text-text-muted">
-                Combined analysis from all lobsters
-              </p>
-            </CardHeader>
-            <CardBody>
-              <p className="text-sm leading-relaxed text-text-secondary whitespace-pre-wrap">
-                {globalSummaryText}
-              </p>
-            </CardBody>
-          </Card>
+            {/* 关键决策 */}
+            {data.summary.keyDecisions.length > 0 && (
+              <Card>
+                <CardHeader>
+                  <h2 className="text-base font-semibold text-text-primary">关键决策</h2>
+                </CardHeader>
+                <CardBody>
+                  <ul className="flex flex-col gap-2">
+                    {data.summary.keyDecisions.map((decision, i) => (
+                      <li key={i} className="flex items-start gap-2 rounded-lg border border-white/5 bg-surface-700/30 p-3">
+                        <span className="mt-0.5 text-lobster">&#x2022;</span>
+                        <p className="text-sm text-text-secondary">{decision}</p>
+                      </li>
+                    ))}
+                  </ul>
+                </CardBody>
+              </Card>
+            )}
+
+            {/* 行动项 */}
+            {data.summary.actionItems.length > 0 && (
+              <Card>
+                <CardHeader>
+                  <h2 className="text-base font-semibold text-text-primary">行动项</h2>
+                </CardHeader>
+                <CardBody>
+                  <ul className="flex flex-col gap-2">
+                    {data.summary.actionItems.map((item, i) => (
+                      <li key={i} className="flex items-start gap-3 rounded-lg border border-white/5 bg-surface-700/30 p-3">
+                        <span className="mt-0.5 flex h-5 w-5 items-center justify-center rounded border border-white/20 text-[10px] text-text-muted">
+                          &#x25A1;
+                        </span>
+                        <p className="text-sm text-text-secondary">{item}</p>
+                      </li>
+                    ))}
+                  </ul>
+                </CardBody>
+              </Card>
+            )}
+          </>
         ) : (
-          <Card className="p-8 text-center">
-            <div className="mb-3 text-3xl">🦞</div>
+          <Card className="p-8 text-center border-lobster/20">
+            <div className="mb-3 animate-pulse-soft text-3xl">&#x1F99E;</div>
             <p className="text-sm text-text-muted">
-              Summary is being generated...
+              等待主龙虾生成会议摘要...
             </p>
             <p className="mt-1 text-xs text-text-muted">
-              Your lobsters are collaborating to create a comprehensive summary.
+              主龙虾正在分析会议内容并生成摘要，请稍候。
             </p>
           </Card>
         )}
 
-        {/* Key Decisions */}
-        {summary && summary.keyDecisions.length > 0 && (
+        {/* 龙虾讨论记录 */}
+        {data.dialogues.length > 0 && (
           <Card>
-            <CardHeader>
+            <button
+              onClick={() => setIsDialogueOpen((prev) => !prev)}
+              className="flex w-full items-center justify-between border-b border-white/5 px-5 py-4 text-left transition-colors hover:bg-surface-700/30"
+            >
               <h2 className="text-base font-semibold text-text-primary">
-                Key Decisions
+                &#x1F99E; 龙虾讨论记录
+                <span className="ml-2 text-xs font-normal text-text-muted">
+                  ({data.dialogues.length} 条)
+                </span>
               </h2>
-            </CardHeader>
-            <CardBody>
-              <ul className="flex flex-col gap-3">
-                {summary.keyDecisions.map((decision, i) => {
-                  const info = getDecisionText(decision);
-                  return (
-                    <li
-                      key={i}
-                      className="rounded-lg border border-white/5 bg-surface-700/30 p-3"
-                    >
-                      <div className="flex items-start gap-2">
-                        <span className="mt-0.5 text-lobster">&#x2022;</span>
-                        <div className="flex-1">
-                          <p className="text-sm text-text-secondary">
-                            {info.text}
-                          </p>
-                          <div className="mt-1.5 flex items-center gap-2">
-                            {info.timestamp && (
-                              <span className="text-[10px] text-text-muted">
-                                {new Date(info.timestamp).toLocaleTimeString()}
-                              </span>
-                            )}
-                            {info.participants && info.participants.length > 0 && (
-                              <div className="flex items-center gap-1">
-                                {info.participants.map((name) => (
-                                  <span
-                                    key={name}
-                                    className="rounded-full bg-surface-600 px-1.5 py-0.5 text-[10px] text-text-muted"
-                                  >
-                                    {name}
-                                  </span>
-                                ))}
-                              </div>
-                            )}
-                          </div>
-                        </div>
+              <svg
+                className={`h-4 w-4 text-text-muted transition-transform duration-200 ${isDialogueOpen ? 'rotate-180' : ''}`}
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <polyline points="6 9 12 15 18 9" />
+              </svg>
+            </button>
+            {isDialogueOpen && (
+              <CardBody className="max-h-[600px] overflow-y-auto">
+                <div className="flex flex-col gap-3">
+                  {data.dialogues.map((d, i) => (
+                    <div key={i} className="group">
+                      <div className="flex items-baseline gap-2">
+                        <span
+                          className="text-xs font-semibold"
+                          style={{ color: speakerColor(d.fromLobsterId) }}
+                        >
+                          &#x1F99E; {d.fromLobsterId}
+                        </span>
+                        {d.toLobsterId && (
+                          <span className="text-[10px] text-text-muted">
+                            &rarr; {d.toLobsterId}
+                          </span>
+                        )}
+                        <span className="text-[10px] text-text-muted">
+                          {formatTs(d.timestamp)}
+                        </span>
                       </div>
-                    </li>
-                  );
-                })}
-              </ul>
-            </CardBody>
+                      <p className="mt-0.5 text-sm leading-relaxed text-text-secondary">
+                        {d.content}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              </CardBody>
+            )}
           </Card>
         )}
 
-        {/* Action Items */}
-        {summary && summary.actionItems.length > 0 && (
-          <Card>
-            <CardHeader>
-              <h2 className="text-base font-semibold text-text-primary">
-                Action Items
-              </h2>
-            </CardHeader>
-            <CardBody>
-              <ul className="flex flex-col gap-2">
-                {summary.actionItems.map((item, i) => {
-                  const info = getActionItemInfo(item);
-                  return (
-                    <li
-                      key={i}
-                      className="flex items-start gap-3 rounded-lg border border-white/5 bg-surface-700/30 p-3"
-                    >
-                      <span className="mt-0.5 flex h-5 w-5 items-center justify-center rounded border border-white/20 text-[10px] text-text-muted">
-                        &#x25A1;
-                      </span>
-                      <div className="flex-1">
-                        <p className="text-sm text-text-secondary">
-                          {info.text}
-                        </p>
-                        <div className="mt-1.5 flex items-center gap-2">
-                          {info.assignee && (
-                            <Badge variant="default">
-                              {info.assignee}
-                            </Badge>
-                          )}
-                          {info.deadline && (
-                            <span className="text-[10px] text-amber-400">
-                              Due: {info.deadline}
-                            </span>
-                          )}
-                          {info.status && (
-                            <Badge
-                              variant={info.status === 'pending' ? 'warning' : 'success'}
-                            >
-                              {info.status}
-                            </Badge>
-                          )}
-                        </div>
-                      </div>
-                    </li>
-                  );
-                })}
-              </ul>
-            </CardBody>
-          </Card>
-        )}
-
-        {/* Full Transcript Accordion */}
-        {transcript.length > 0 && (
+        {/* 会议转录 */}
+        {data.transcript.length > 0 && (
           <Card>
             <button
               onClick={() => setIsTranscriptOpen((prev) => !prev)}
               className="flex w-full items-center justify-between border-b border-white/5 px-5 py-4 text-left transition-colors hover:bg-surface-700/30"
             >
               <h2 className="text-base font-semibold text-text-primary">
-                Full Transcript
+                会议转录
                 <span className="ml-2 text-xs font-normal text-text-muted">
-                  ({transcript.length} segments)
+                  ({data.transcript.length} 段)
                 </span>
               </h2>
               <svg
@@ -396,14 +360,17 @@ export default function SummaryPage() {
             {isTranscriptOpen && (
               <CardBody className="max-h-[500px] overflow-y-auto">
                 <div className="flex flex-col gap-2.5">
-                  {transcript.map((seg) => (
-                    <div key={seg.id} className="group">
+                  {data.transcript.map((seg, i) => (
+                    <div key={i} className="group">
                       <div className="flex items-baseline gap-2">
-                        <span className="text-xs font-semibold text-blue-400">
-                          {seg.speakerName}
+                        <span
+                          className="text-xs font-semibold"
+                          style={{ color: speakerColor(seg.speakerId) }}
+                        >
+                          {seg.speakerName ?? seg.speakerId}
                         </span>
                         <span className="text-[10px] text-text-muted">
-                          {formatTime(seg.timestamp)}
+                          {formatTs(seg.timestamp)}
                         </span>
                       </div>
                       <p className="mt-0.5 text-sm leading-relaxed text-text-secondary">
@@ -418,47 +385,12 @@ export default function SummaryPage() {
         )}
       </div>
 
-      {/* Back button */}
+      {/* 返回 */}
       <div className="mt-8 text-center print:hidden">
         <Link href="/lobby">
-          <Button variant="secondary">Back to Lobby</Button>
+          <Button variant="secondary">返回大厅</Button>
         </Link>
       </div>
     </main>
-  );
-}
-
-function CopyIcon() {
-  return (
-    <svg
-      width="14"
-      height="14"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <rect width="14" height="14" x="8" y="8" rx="2" ry="2" />
-      <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2" />
-    </svg>
-  );
-}
-
-function CheckIcon() {
-  return (
-    <svg
-      width="14"
-      height="14"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <polyline points="20 6 9 17 4 12" />
-    </svg>
   );
 }

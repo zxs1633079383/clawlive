@@ -3,10 +3,16 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ClientMessage, ServerMessage } from '@clawlive/shared';
 
-const WS_BASE =
-  typeof window !== 'undefined'
-    ? (process.env.NEXT_PUBLIC_WS_URL ?? 'ws://localhost:3001')
-    : 'ws://localhost:3001';
+function getWsBase(): string {
+  if (typeof window === 'undefined') return 'ws://localhost:3001';
+  if (process.env.NEXT_PUBLIC_WS_URL) return process.env.NEXT_PUBLIC_WS_URL;
+  const isHttps = window.location.protocol === 'https:';
+  // HTTPS → WSS via SSL proxy on 3444; HTTP → WS direct on 3001
+  const wsPort = isHttps ? 3444 : 3001;
+  return `${isHttps ? 'wss:' : 'ws:'}//${window.location.hostname}:${wsPort}`;
+}
+
+const WS_BASE = getWsBase();
 
 const MAX_RECONNECT_DELAY = 30_000;
 const INITIAL_RECONNECT_DELAY = 1_000;

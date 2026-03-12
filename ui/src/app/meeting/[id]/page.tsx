@@ -13,6 +13,7 @@ import { MeetingControls } from '@/components/meeting/MeetingControls';
 import { ParticipantGrid } from '@/components/meeting/ParticipantGrid';
 import { RightSidePanel } from '@/components/meeting/RightSidePanel';
 import { AgoraBridge } from '@/components/meeting/AgoraBridge';
+import { LobsterJoinBar } from '@/components/meeting/LobsterJoinBar';
 
 // Agora App ID from environment (optional - degrades gracefully if not set)
 const AGORA_APP_ID = process.env.NEXT_PUBLIC_AGORA_APP_ID ?? '';
@@ -51,40 +52,53 @@ export default function MeetingRoomPage() {
   const [isMuted, setIsMuted] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [audioState, setAudioState] = useState({ isJoined: false, isAudioEnabled: true });
-  const [isLobsterLoading, setIsLobsterLoading] = useState(false);
   const [isDialogueThinking, setIsDialogueThinking] = useState(false);
+  const [lobsterCount, setLobsterCount] = useState(0);
+  const [wsLog, setWsLog] = useState<string[]>([]);
+
+  const pushLog = useCallback((msg: string) => {
+    const ts = new Date().toLocaleTimeString('en', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    setWsLog((prev) => [`[${ts}] ${msg}`, ...prev].slice(0, 20));
+  }, []);
 
   const { segments, addSegment, scrollRef } = useTranscript();
-  const { suggestions, dialogues, addSuggestion, addDialogue } = useLobster();
+  const { dialogues, addDialogue } = useLobster();
 
   // Handle incoming WebSocket messages
+  // Humans are observers: they see transcript + lobster dialogue
   const handleWsMessage = useCallback(
     (msg: ServerMessage) => {
       switch (msg.channel) {
         case 'transcript':
           if (msg.type === 'segment') {
+            const p = msg.payload as { speakerName?: string; text?: string; isFinal?: boolean };
+            pushLog(`📥 transcript: "${(p.text ?? '').slice(0, 30)}" final=${p.isFinal}`);
             addSegment(msg.payload);
           }
           break;
 
         case 'lobster':
-          if (msg.type === 'suggestion') {
-            // Only show suggestions targeted to this user
-            if (msg.targetUserId === userId) {
-              addSuggestion(msg.payload);
-              setIsLobsterLoading(false);
-            }
-          } else if (msg.type === 'dialogue') {
+          // Lobster dialogue is broadcast to ALL observers
+          if (msg.type === 'dialogue') {
+            const p = msg.payload as { fromLobsterId?: string; content?: string };
+            pushLog(`📥 lobster: [${p.fromLobsterId}] "${(p.content ?? '').slice(0, 40)}"`);
             addDialogue(msg.payload);
             setIsDialogueThinking(false);
           }
           break;
 
         case 'control':
+          pushLog(`📥 control: ${msg.type} ${JSON.stringify(msg.payload).slice(0, 50)}`);
           if (msg.type === 'participant_joined' || msg.type === 'participant_left') {
-            // Refresh participant list
             api.meetings.get(meetingId).then((m) => {
               setMeeting(m);
+              // Update lobster count from participants with lobster- prefix
+              const raw = m as Meeting & { participants?: Array<{ userId: string }> };
+              if (raw.participants) {
+                setLobsterCount(
+                  raw.participants.filter((p) => p.userId.startsWith('lobster-')).length,
+                );
+              }
             }).catch(() => { /* ignore */ });
           } else if (msg.type === 'meeting_state_changed') {
             const payload = msg.payload as { status?: string };
@@ -93,14 +107,15 @@ export default function MeetingRoomPage() {
                 prev ? { ...prev, status: payload.status as Meeting['status'] } : prev,
               );
             }
-            if (payload?.status === 'ended') {
-              router.push(`/summary/${meetingId}`);
-            }
+          } else if (msg.type === 'meeting_ended') {
+            // 会议结束 → 跳转到摘要页面
+            // 主龙虾会在后台生成摘要，摘要页面会轮询获取
+            router.push(`/summary/${meetingId}`);
           }
           break;
       }
     },
-    [userId, meetingId, addSegment, addSuggestion, addDialogue, router],
+    [meetingId, addSegment, addDialogue, router, pushLog],
   );
 
   const { send, isConnected, disconnect } = useMeetingWs(
@@ -109,20 +124,22 @@ export default function MeetingRoomPage() {
     { onMessage: handleWsMessage },
   );
 
-  // STT: send transcript segments via WebSocket
+  // STT: send transcript segments via WebSocket (humans speak, lobsters listen)
   const handleSttSegment = useCallback(
     (segment: TranscriptSegment) => {
+      console.log(`[meeting] 📤 STT segment: "${segment.text}" (final: ${segment.isFinal})`);
+      pushLog(`📤 send: "${segment.text.slice(0, 30)}" final=${segment.isFinal}`);
       addSegment(segment);
       send({ channel: 'transcript', type: 'segment', payload: segment });
     },
-    [addSegment, send],
+    [addSegment, send, pushLog],
   );
 
   // Determine whether to use Agora bridge or direct STT
   const useAgoraBridge = Boolean(AGORA_APP_ID);
 
   // Direct STT (used when Agora is not configured)
-  const { isListening, start: startStt, stop: stopStt } = useStt({
+  const { isListening, isSupported: isSttSupported, error: sttError, stage: sttStage, start: startStt, stop: stopStt } = useStt({
     meetingId,
     speakerId: userId,
     speakerName: userName,
@@ -144,7 +161,7 @@ export default function MeetingRoomPage() {
         const m = await api.meetings.get(meetingId);
         setMeeting(m);
 
-        // Auto-join the meeting — lobster auto-loads SKILL.md on server side
+        // Auto-join the meeting as human observer
         const participant = await api.meetings.join(meetingId, {
           userId,
           displayName: userName,
@@ -179,7 +196,6 @@ export default function MeetingRoomPage() {
     setIsMuted(newMuted);
 
     if (!useAgoraBridge) {
-      // Direct STT mode - manage STT manually
       if (newMuted) {
         stopStt();
         send({ channel: 'control', type: 'mute' });
@@ -188,7 +204,6 @@ export default function MeetingRoomPage() {
         send({ channel: 'control', type: 'unmute' });
       }
     } else {
-      // Agora bridge mode - AgoraBridge handles STT sync via isMuted prop
       send({ channel: 'control', type: newMuted ? 'mute' : 'unmute' });
     }
   }
@@ -209,16 +224,6 @@ export default function MeetingRoomPage() {
     disconnect();
     router.push('/lobby');
   }
-
-  // Send lobster prompt
-  function handleSendPrompt(text: string) {
-    setIsLobsterLoading(true);
-    send({ channel: 'lobster', type: 'user_prompt', payload: { text } });
-  }
-
-  // Find current user's lobster skill
-  const currentParticipant = participants.find((p) => p.userId === userId);
-  const lobsterSkillName = currentParticipant?.lobsterSkillId;
 
   if (error) {
     return (
@@ -255,6 +260,9 @@ export default function MeetingRoomPage() {
         />
       )}
 
+      {/* Lobster invite URL — show link for lobsters to join */}
+      <LobsterJoinBar meetingId={meetingId} lobsterCount={lobsterCount} />
+
       {/* Top controls */}
       <MeetingControls
         meetingTitle={meeting?.title ?? 'Loading...'}
@@ -276,20 +284,40 @@ export default function MeetingRoomPage() {
           />
         </div>
 
-        {/* Right: Tabbed panel */}
+        {/* Right: Lobster Discussion (primary) + Transcript (secondary) */}
         <div className="flex w-[400px] flex-col bg-surface-800/50">
           <RightSidePanel
             segments={segments}
             scrollRef={scrollRef}
-            suggestions={suggestions}
             dialogues={dialogues}
-            onSendPrompt={handleSendPrompt}
-            lobsterSkillName={lobsterSkillName}
-            isLobsterLoading={isLobsterLoading}
             isDialogueThinking={isDialogueThinking}
           />
         </div>
       </div>
+
+      {/* Debug panel — STT + WebSocket log */}
+      {!useAgoraBridge && (
+        <div className="border-t border-white/10 bg-surface-900 text-[10px] font-mono text-text-muted">
+          <div suppressHydrationWarning className="flex items-center gap-3 px-4 py-1">
+            <span suppressHydrationWarning>STT: {isSttSupported ? '✅' : '❌'}</span>
+            <span>Listening: {isListening ? '🟢' : '🔴'}</span>
+            <span>WS: {isConnected ? '🟢' : '🔴'}</span>
+            <span>Muted: {isMuted ? 'yes' : 'no'}</span>
+            <span>Seg: {segments.length}</span>
+            <span className="text-yellow-400">{sttStage}</span>
+            {sttError && <span className="text-red-400">{sttError}</span>}
+          </div>
+          {wsLog.length > 0 && (
+            <div className="max-h-[120px] overflow-y-auto border-t border-white/5 px-4 py-1 space-y-0.5">
+              {wsLog.map((line, i) => (
+                <div key={i} className={line.includes('📤') ? 'text-blue-400' : line.includes('lobster') ? 'text-orange-400' : 'text-text-muted'}>
+                  {line}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

@@ -3,12 +3,14 @@
   "private": true,
   "scripts": {
     "dev": "pnpm -r --parallel run dev",
+    "dev:ssl": "pnpm dev & npx local-ssl-proxy --source 3443 --target 3000 --hostname 0.0.0.0 & npx local-ssl-proxy --source 3444 --target 3001 --hostname 0.0.0.0",
     "build": "pnpm -r run build",
     "test": "pnpm -r run test",
     "lint": "pnpm -r run lint",
     "clean": "pnpm -r run clean"
   },
   "devDependencies": {
+    "local-ssl-proxy": "^2.0.5",
     "typescript": "^5.7.3"
   },
   "engines": {
@@ -20,5 +22,6 @@
       "better-sqlite3",
       "esbuild"
     ]
-  }
+  },
+  "packageManager": "pnpm@10.28.1+sha512.7d7dbbca9e99447b7c3bf7a73286afaaf6be99251eb9498baefa7d406892f67b879adb3a1d7e687fc4ccc1a388c7175fbaae567a26ab44d1067b54fcb0d6a316"
 }

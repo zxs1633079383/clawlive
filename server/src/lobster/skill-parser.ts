@@ -85,12 +85,56 @@ export async function parseSkillFromUrl(url: string): Promise<LobsterSkill> {
 
 /**
  * Load a skill from either a URL (http/https) or a local file path.
+ * If the URL points to our own /api/skills/:name/raw, read from disk directly
+ * to avoid self-signed cert / network issues.
  */
 export async function loadSkill(source: string): Promise<LobsterSkill> {
+  // Handle data URIs (e.g. data:text/markdown;base64,...)
+  if (source.startsWith('data:')) {
+    const base64Match = source.match(/^data:[^;]*;base64,(.+)$/);
+    if (base64Match) {
+      const raw = Buffer.from(base64Match[1], 'base64').toString('utf-8');
+      return parseSkill(raw);
+    }
+    // data URI without base64 encoding
+    const plainMatch = source.match(/^data:[^,]*,(.+)$/);
+    if (plainMatch) {
+      return parseSkill(decodeURIComponent(plainMatch[1]));
+    }
+    throw new Error('Invalid data URI format for skillSource');
+  }
+
   if (source.startsWith('http://') || source.startsWith('https://')) {
+    // Check if this is a self-referencing URL to our own skills API
+    const selfMatch = source.match(/\/api\/skills\/([^/]+)\/raw$/);
+    if (selfMatch) {
+      const skillName = selfMatch[1];
+      return loadSkillFromDisk(skillName);
+    }
     return parseSkillFromUrl(source);
   }
   return parseSkillFile(source);
+}
+
+/**
+ * Load a skill by name from the local skills directory.
+ * Tries both {name}.md and {name}.skill.md naming conventions.
+ */
+async function loadSkillFromDisk(skillName: string): Promise<LobsterSkill> {
+  const { resolve } = await import('node:path');
+  const { config: appConfig } = await import('../config.js');
+  const skillsDir = resolve(appConfig.SKILLS_DIR);
+  const candidates = [
+    resolve(skillsDir, `${skillName}.md`),
+    resolve(skillsDir, `${skillName}.skill.md`),
+  ];
+  for (const filePath of candidates) {
+    try {
+      const raw = await readFile(filePath, 'utf-8');
+      return parseSkill(raw);
+    } catch { /* try next */ }
+  }
+  throw new Error(`Skill "${skillName}" not found in ${skillsDir}`);
 }
 
 /**

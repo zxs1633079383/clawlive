@@ -35,3 +35,14 @@ export interface LobsterDialogueTurn {
   content: string;
   timestamp: Date;
 }
+
+/**
+ * 会议摘要 — 由主龙虾（会议主持人）在会议结束后生成
+ */
+export interface MeetingSummaryPayload {
+  fromLobsterId: string;
+  summary: string;              // 会议整体摘要
+  keyDecisions: string[];       // 关键决策
+  actionItems: string[];        // 行动项
+  timestamp: Date;
+}

@@ -64,16 +64,53 @@ skillRouter.get('/', async (_req: Request, res: Response) => {
   }
 });
 
-// GET /api/skills/:name - Get a single skill
+// GET /api/skills/:name/raw - Get raw SKILL.md markdown (for lobster agents to read)
+skillRouter.get('/:name/raw', async (req: Request, res: Response) => {
+  try {
+    const skillsDir = resolve(config.SKILLS_DIR);
+    const candidates = [
+      resolve(skillsDir, `${req.params.name}.md`),
+      resolve(skillsDir, `${req.params.name}.skill.md`),
+    ];
+
+    let raw: string | undefined;
+    for (const filePath of candidates) {
+      try {
+        raw = await readFile(filePath, 'utf-8');
+        break;
+      } catch { /* try next */ }
+    }
+    if (!raw) {
+      res.status(404).type('text/plain').send('Skill not found');
+      return;
+    }
+
+    res.type('text/markdown').send(raw);
+  } catch (err) {
+    console.error('[skill-routes] Error reading skill:', err);
+    res.status(500).type('text/plain').send('Failed to read skill');
+  }
+});
+
+// GET /api/skills/:name - Get a single skill (JSON)
+// Supports both "meeting-host.md" and "meeting-host.skill.md" naming conventions
 skillRouter.get('/:name', async (req: Request, res: Response) => {
   try {
     const skillsDir = resolve(config.SKILLS_DIR);
-    const filePath = resolve(skillsDir, `${req.params.name}.md`);
+    // Try multiple naming conventions: name.md, name.skill.md
+    const candidates = [
+      resolve(skillsDir, `${req.params.name}.md`),
+      resolve(skillsDir, `${req.params.name}.skill.md`),
+    ];
 
-    let raw: string;
-    try {
-      raw = await readFile(filePath, 'utf-8');
-    } catch {
+    let raw: string | undefined;
+    for (const filePath of candidates) {
+      try {
+        raw = await readFile(filePath, 'utf-8');
+        break;
+      } catch { /* try next */ }
+    }
+    if (!raw) {
       res.status(404).json({ success: false, data: null, error: 'Skill not found' });
       return;
     }

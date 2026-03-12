@@ -1,4 +1,4 @@
-import type { LobsterDialogueTurn, LobsterMessage } from './lobster.js';
+import type { LobsterDialogueTurn, MeetingSummaryPayload } from './lobster.js';
 
 export interface TranscriptSegment {
   id: string;
@@ -12,14 +12,17 @@ export interface TranscriptSegment {
 }
 
 // Client -> Server
+// Humans send: transcript + control
+// Lobsters send: dialogue + summary (lobster is an external agent with its own LLM)
 export type ClientMessage =
   | { channel: 'transcript'; type: 'segment'; payload: TranscriptSegment }
-  | { channel: 'lobster'; type: 'user_prompt'; payload: { text: string } }
+  | { channel: 'lobster'; type: 'dialogue'; payload: LobsterDialogueTurn }
+  | { channel: 'lobster'; type: 'summary'; payload: MeetingSummaryPayload }
   | { channel: 'control'; type: 'mute' | 'unmute' | 'leave' };
 
-// Server -> Client
+// Server -> Client (broadcast to all: humans observe, lobsters receive transcript)
 export type ServerMessage =
   | { channel: 'transcript'; type: 'segment'; payload: TranscriptSegment }
-  | { channel: 'lobster'; type: 'suggestion'; payload: LobsterMessage; targetUserId: string }
   | { channel: 'lobster'; type: 'dialogue'; payload: LobsterDialogueTurn }
-  | { channel: 'control'; type: 'participant_joined' | 'participant_left' | 'meeting_state_changed' | 'error'; payload: unknown };
+  | { channel: 'lobster'; type: 'summary'; payload: MeetingSummaryPayload }
+  | { channel: 'control'; type: 'participant_joined' | 'participant_left' | 'meeting_state_changed' | 'meeting_ended' | 'error'; payload: unknown };
