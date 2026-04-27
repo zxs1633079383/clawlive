@@ -120,3 +120,6 @@ export const api = {
 
 /** PR Bot smoke test — verify GitNexus impact analysis fires */
 export const _gitnexusSmokeTest = (id: string) => fetch(`/api/meetings/${id}/_smoke`);
+
+/** Real code change to trigger detect_changes */
+export const fetchUserById = (id: string) => fetch(`/api/users/${id}`).then(r => r.json());
