@@ -43,8 +43,12 @@ export function createMeeting(req: CreateMeetingRequest): Meeting {
   return meeting;
 }
 
-export function getMeeting(id: string): Meeting | null {
-  return meetings.get(id) ?? null;
+export function getMeeting(id: string, opts?: { includeArchived?: boolean }): Meeting | null {
+  const m = meetings.get(id);
+  if (!m) return null;
+  // includeArchived: when false (default) and meeting status === 'ended', return null
+  if (!opts?.includeArchived && m.status === 'ended') return null;
+  return m;
 }
 
 export function listMeetings(): readonly Meeting[] {
@@ -155,4 +159,14 @@ export class InvalidTransitionError extends Error {
     super(`Invalid meeting status transition: ${from} -> ${to}`);
     this.name = 'InvalidTransitionError';
   }
+}
+
+
+/** Archive a meeting (soft-delete: status -> ended). */
+export function archiveMeeting(id: string): boolean {
+  const m = meetings.get(id);
+  if (!m) return false;
+  m.status = 'ended';
+  m.endedAt = Date.now();
+  return true;
 }
