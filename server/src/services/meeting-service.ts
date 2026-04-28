@@ -43,8 +43,12 @@ export function createMeeting(req: CreateMeetingRequest): Meeting {
   return meeting;
 }
 
-export function getMeeting(id: string): Meeting | null {
-  return meetings.get(id) ?? null;
+export function getMeeting(id: string, opts?: { includeArchived?: boolean }): Meeting | null {
+  const m = meetings.get(id);
+  if (!m) return null;
+  // includeArchived: when false (default) and meeting status === 'ended', return null
+  if (!opts?.includeArchived && m.status === 'ended') return null;
+  return m;
 }
 
 export function listMeetings(): readonly Meeting[] {
@@ -156,3 +160,21 @@ export class InvalidTransitionError extends Error {
     this.name = 'InvalidTransitionError';
   }
 }
+
+
+/** Archive a meeting (soft-delete: status -> ended). */
+export function archiveMeeting(id: string): boolean {
+  const m = meetings.get(id);
+  if (!m) return false;
+  m.status = 'ended';
+  m.endedAt = Date.now();
+  return true;
+}
+
+// trigger A1+A2+A3 verify @ 20260428T063957Z
+
+// regression test multi-forge refactor @ 20260428T071209Z
+
+// regression 20260428T080143Z
+
+// regression 20260428T082837Z

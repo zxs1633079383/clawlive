@@ -117,3 +117,30 @@ export const api = {
     get: (name: string) => request<LobsterSkill>(`/api/skills/${name}`),
   },
 };
+
+// Cross-repo direct fetches (literal-string so tree-sitter contract extractor picks them up).
+// These mirror three clawlive-api endpoints — used to verify cross-repo impact in PR Bot.
+export async function fetchMeetingExportPdf(meetingId: string): Promise<Blob> {
+  const res = await fetch(`/api/meetings/${meetingId}/export.pdf`, { method: 'GET' });
+  if (!res.ok) throw new Error(`exportPdf failed: ${res.status}`);
+  return res.blob();
+}
+
+export async function fetchMeetingInsights(meetingId: string): Promise<unknown> {
+  const res = await fetch(`/api/meetings/${meetingId}/insights`, { method: 'GET' });
+  if (!res.ok) throw new Error(`insights failed: ${res.status}`);
+  return res.json();
+}
+
+export async function requestMeetingTranslate(
+  meetingId: string,
+  payload: { targetLang: string },
+): Promise<unknown> {
+  const res = await fetch(`/api/meetings/${meetingId}/translate`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) throw new Error(`translate failed: ${res.status}`);
+  return res.json();
+}
